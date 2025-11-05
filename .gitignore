@@ -1,0 +1,60 @@
+# General
+.DS_Store
+*.swp
+*.swo
+*.tmp
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+coverage.out
+/backend/bin/
+/backend/build/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Node / frontend artifacts
+node_modules/
+/frontend/node_modules/
+/frontend/build/
+/frontend/dist/
+build/
+dist/
+.tmp/
+.parcel-cache/
+.eslintcache
+
+# Package managers
+package-lock.json
+npm-shrinkwrap.json
+yarn.lock
+pnpm-lock.yaml
+
+temp/
+
+# Data folders
+local_data/
+remote_data/
