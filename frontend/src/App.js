@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 import Dashboard from './components/Dashboard';
 import FileList from './components/FileList';
@@ -6,6 +6,22 @@ import ActivityLog from './components/ActivityLog';
 
 const API_URL = 'http://localhost:8080';
 const WS_URL = 'ws://localhost:8080/ws';
+
+const normalizeActivity = (activity) => {
+  const eventTime = activity?.timestamp ? new Date(activity.timestamp) : new Date();
+  const timeMs = Number.isNaN(eventTime.getTime()) ? Date.now() : eventTime.getTime();
+
+  return {
+    ...activity,
+    timestamp: new Date(timeMs).toISOString(),
+    timestampMs: timeMs,
+    id:
+      activity?.id ||
+      `${timeMs}-${activity?.type || 'event'}-${activity?.filePath || 'system'}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`,
+  };
+};
 
 function App() {
   const [status, setStatus] = useState({
@@ -21,23 +37,7 @@ function App() {
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
 
-  const normalizeActivity = (activity) => {
-    const eventTime = activity?.timestamp ? new Date(activity.timestamp) : new Date();
-    const timeMs = Number.isNaN(eventTime.getTime()) ? Date.now() : eventTime.getTime();
-
-    return {
-      ...activity,
-      timestamp: new Date(timeMs).toISOString(),
-      timestampMs: timeMs,
-      id:
-        activity?.id ||
-        `${timeMs}-${activity?.type || 'event'}-${activity?.filePath || 'system'}-${Math.random()
-          .toString(36)
-          .slice(2, 8)}`,
-    };
-  };
-
-  const pushActivity = (activity) => {
+  const pushActivity = useCallback((activity) => {
     setActivities((prev) => {
       const normalized = normalizeActivity(activity);
 
@@ -56,7 +56,28 @@ function App() {
         .sort((a, b) => (b.timestampMs || 0) - (a.timestampMs || 0))
         .slice(0, 50);
     });
-  };
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/status`);
+      const data = await response.json();
+      setStatus(data);
+    } catch (error) {
+      console.error('Error fetching status:', error);
+      setStatus(prev => ({ ...prev, status: 'error' }));
+    }
+  }, []);
+
+  const fetchFiles = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/files`);
+      const data = await response.json();
+      setFiles(data || []);
+    } catch (error) {
+      console.error('Error fetching files:', error);
+    }
+  }, []);
 
   useEffect(() => {
     // Fetch initial status
@@ -84,7 +105,7 @@ function App() {
       ws.onmessage = (event) => {
         const syncEvent = JSON.parse(event.data);
         console.log('Received sync event:', syncEvent);
-        
+
         // Add to activity log
         pushActivity(syncEvent);
 
@@ -125,28 +146,7 @@ function App() {
         wsRef.current = null;
       }
     };
-  }, []);
-
-  const fetchStatus = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/status`);
-      const data = await response.json();
-      setStatus(data);
-    } catch (error) {
-      console.error('Error fetching status:', error);
-      setStatus(prev => ({ ...prev, status: 'error' }));
-    }
-  };
-
-  const fetchFiles = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/files`);
-      const data = await response.json();
-      setFiles(data || []);
-    } catch (error) {
-      console.error('Error fetching files:', error);
-    }
-  };
+  }, [fetchStatus, fetchFiles, pushActivity]);
 
   const handlePause = async () => {
     try {

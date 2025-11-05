@@ -2,12 +2,12 @@ package api
 
 import (
 	"backend/internal/engine"
-	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
@@ -17,6 +17,7 @@ type Server struct {
 	clientMu sync.RWMutex
 	upgrader websocket.Upgrader
 	events   chan SyncEvent
+	router   *gin.Engine
 }
 
 type SyncEvent struct {
@@ -41,6 +42,9 @@ type SyncResponse struct {
 }
 
 func NewServer(engine *engine.SyncEngine) *Server {
+	router := gin.New()
+	router.Use(gin.Logger(), gin.Recovery())
+
 	server := &Server{
 		engine:  engine,
 		clients: make(map[*websocket.Conn]bool),
@@ -50,8 +54,29 @@ func NewServer(engine *engine.SyncEngine) *Server {
 			},
 		},
 		events: make(chan SyncEvent, 100),
+		router: router,
 	}
-	
+
+	router.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusOK)
+			return
+		}
+		c.Next()
+	})
+
+	apiGroup := router.Group("/api")
+	apiGroup.GET("/status", server.handleStatus)
+	apiGroup.GET("/files", server.handleFiles)
+	apiGroup.POST("/pause", server.handlePause)
+	apiGroup.POST("/resume", server.handleResume)
+	apiGroup.POST("/sync", server.handleManualSync)
+
+	router.GET("/ws", server.handleWebSocket)
+
 	// Register callback to receive sync events from engine
 	engine.SetEventCallback(func(eventType, filePath, direction, message string) {
 		server.NotifyEvent(SyncEvent{
@@ -62,40 +87,18 @@ func NewServer(engine *engine.SyncEngine) *Server {
 			Message:   message,
 		})
 	})
-	
+
 	return server
 }
 
 func (s *Server) Start(port string) error {
-	http.HandleFunc("/api/status", s.handleStatus)
-	http.HandleFunc("/api/files", s.handleFiles)
-	http.HandleFunc("/api/pause", s.handlePause)
-	http.HandleFunc("/api/resume", s.handleResume)
-	http.HandleFunc("/api/sync", s.handleManualSync)
-	http.HandleFunc("/ws", s.handleWebSocket)
-	
-	// Enable CORS
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	})
-
 	go s.broadcastEvents()
 
 	log.Printf("API server starting on port %s\n", port)
-	return http.ListenAndServe(":"+port, nil)
+	return s.router.Run(":" + port)
 }
 
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
+func (s *Server) handleStatus(c *gin.Context) {
 	status := StatusResponse{
 		Status:      "running",
 		LocalFiles:  s.engine.GetLocalFileCount(),
@@ -104,19 +107,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		IsPaused:    s.engine.IsPaused(),
 	}
 
-	json.NewEncoder(w).Encode(status)
+	c.JSON(http.StatusOK, status)
 }
 
-func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
+func (s *Server) handleFiles(c *gin.Context) {
 	files := s.engine.GetFileList()
-	json.NewEncoder(w).Encode(files)
+	c.JSON(http.StatusOK, files)
 }
 
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := s.upgrader.Upgrade(w, r, nil)
+func (s *Server) handleWebSocket(c *gin.Context) {
+	conn, err := s.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("WebSocket upgrade error: %v\n", err)
 		return
@@ -167,68 +167,43 @@ func (s *Server) NotifyEvent(event SyncEvent) {
 	}
 }
 
-func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func (s *Server) handlePause(c *gin.Context) {
 	s.engine.Pause()
-	
+
 	response := SyncResponse{
 		Success: true,
 		Message: "Sync engine paused",
 	}
-	json.NewEncoder(w).Encode(response)
+	c.JSON(http.StatusOK, response)
 }
 
-func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func (s *Server) handleResume(c *gin.Context) {
 	s.engine.Resume()
-	
+
 	response := SyncResponse{
 		Success: true,
 		Message: "Sync engine resumed",
 	}
-	json.NewEncoder(w).Encode(response)
+	c.JSON(http.StatusOK, response)
 }
 
-func (s *Server) handleManualSync(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+func (s *Server) handleManualSync(c *gin.Context) {
 	err := s.engine.ManualSync()
 	if err != nil {
 		response := SyncResponse{
 			Success: false,
 			Message: err.Error(),
 		}
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(response)
+		c.JSON(http.StatusBadRequest, response)
 		return
 	}
-	
+
 	response := SyncResponse{
 		Success: true,
 		Message: "Manual sync completed successfully",
 	}
-	json.NewEncoder(w).Encode(response)
-	
+	c.JSON(http.StatusOK, response)
+
 	// Notify connected clients
 	s.NotifyEvent(SyncEvent{
 		Type:      "sync",

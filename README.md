@@ -1,22 +1,24 @@
 # File Sync Service
 
-File Sync Service keeps two directories in lockstep and provides a real-time dashboard that surfaces activity, status, and manual controls. The backend is written in Go, the frontend in React, and both communicate through REST and WebSocket APIs.
+File Sync Service keeps two directories in lockstep and provides a real-time dashboard that surfaces activity, status, and manual controls. The backend is written in Go (Gin-powered REST + WebSocket API), the frontend in React, and both communicate through the shared API surface.
 
 ## Architecture Overview
 
 ```
-┌──────────┐      REST / WebSocket      ┌──────────────┐
-│ React UI │ <────────────────────────► │ Go API Layer │
-└──────────┘                            └──────┬───────┘
-                                               │
-                                       ┌───────▼────────┐
-                                       │ Sync Engine    │
-                                       │ (fsnotify,     │
-                                       │  hashing, etc.)│
-                                       └───────┬────────┘
-                               ┌───────────────┼───────────────┐
-                               │               │               │
-                      ./local_data     ./remote_data      Storage providers
+┌──────────┐   REST / WebSocket (Gin)   ┌────────────────────┐
+│ React UI │ <────────────────────────► │ Go API Layer (Gin) │
+└──────────┘                             └─────────┬──────────┘
+                                                  │
+                                        ┌─────────▼─────────────┐
+                                        │      Sync Engine      │
+                                        │  fsnotify, hashing,   │
+                                        │  reconciliation, etc. │
+                                        └─────────┬─────────────┘
+                                  ┌───────────────┴───────────────┐
+                                  │                               │
+                      ./local_data (default root)      ./remote_data (default root)
+                                  │                               │
+                            Storage providers (filesystem, S3, GCS, ...)
 ```
 
 ## Project Structure
@@ -24,18 +26,18 @@ File Sync Service keeps two directories in lockstep and provides a real-time das
 ```
 File Sync Service/
 ├── backend/
-│   ├── cmd/                # Go entry point for the 
+│   ├── cmd/                # Go entry point for the API server
 │   ├── internal/
-│   │   ├── api/            # HTTP + WebSocket server
-│   │   ├── engine/         # Sync engine orchestrating 
-│   │   └── models/         # Shared Go data structures
-│   │   └── storage/        # Pluggable storage 
-│   ├── local_data/         # Default local watch 
-│   └── remote_data/        # Default remote folder 
+│   │   ├── api/            # Gin HTTP + WebSocket handlers
+│   │   ├── engine/         # Sync engine orchestrating reconciliation
+│   │   ├── models/         # Shared Go data structures
+│   │   └── storage/        # Pluggable storage provider implementations
+│   ├── local_data/         # Default local watch folder
+│   └── remote_data/        # Default remote folder mirror
 ├── frontend/
 │   ├── src/                # React UI (dashboard, activity log, file list)
-│   ├── public/             # Static assets for the 
-│   └── package.json        # Frontend dependencies and 
+│   ├── public/             # Static assets for the frontend build
+│   └── package.json        # Frontend dependencies and scripts
 └── README.md
 ```
 
@@ -57,7 +59,7 @@ File Sync Service/
 ## Getting Started
 
 ### Prerequisites
-- Go 1.21 or later
+- Go 1.24 or later
 - Node.js 18+ and npm
 
 ### Backend
@@ -67,9 +69,9 @@ go mod download
 go run cmd/main.go
 ```
 
-The server instantiates a local `FileSystemProvider`, watches `./local_data` and `./remote_data`, and exposes HTTP/WebSocket APIs on port `8080`.
+The server instantiates a local `FileSystemProvider`, watches `./local_data` and `./remote_data`, and exposes HTTP/WebSocket APIs on port `8080` via Gin.
 
-To experiment with an alternate backend, implement the `storage.StorageProvider` interface (build state map, read/write streams, metadata, deletes, ensure directory, path) and wire it into `engine.NewSyncEngine`.
+To experiment with an alternate backend, implement the `storage.StorageProvider` interface (build state map, read/write streams, metadata, deletes, ensure directory, path helpers) and wire it into `engine.NewSyncEngine`. Both `./local_data` and `./remote_data` are simply the default filesystem roots; you can replace either or both with custom providers (e.g., S3, GCS, in-memory) without changing the higher layers.
 
 ### Frontend
 ```bash
