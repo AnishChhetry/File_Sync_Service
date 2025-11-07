@@ -60,22 +60,11 @@ type FileInfo struct {
 	Location     string `json:"location"`
 }
 
-func NewSyncEngine(localPath string, remotePath string) (*SyncEngine, error) {
+func NewSyncEngine(localProvider storage.StorageProvider, remoteProvider storage.StorageProvider) (*SyncEngine, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
 	}
-
-	localProvider, err := storage.NewFileSystemProvider(localPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize local provider: %w", err)
-	}
-
-	remoteProvider, err := storage.NewFileSystemProvider(remotePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize remote provider: %w", err)
-	}
-
 	return &SyncEngine{
 		localProvider:  localProvider,
 		remoteProvider: remoteProvider,
@@ -240,134 +229,134 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		log.Printf("Sync paused, ignoring event for: %s\n", event.Name)
 		return nil
 	}
-    localRoot := s.localProvider.GetPath()
-    remoteRoot := s.remoteProvider.GetPath()
+	localRoot := s.localProvider.GetPath()
+	remoteRoot := s.remoteProvider.GetPath()
 
-    var srcProvider, dstProvider storage.StorageProvider
-    var srcMap, dstMap *map[string]models.FileMetadata
-    var isLocalEvent bool
+	var srcProvider, dstProvider storage.StorageProvider
+	var srcMap, dstMap *map[string]models.FileMetadata
+	var isLocalEvent bool
 
-    log.Printf("Path check - event: '%s' | local root: '%s' | remote root: '%s'\n", event.Name, localRoot, remoteRoot)
+	log.Printf("Path check - event: '%s' | local root: '%s' | remote root: '%s'\n", event.Name, localRoot, remoteRoot)
 
-    if strings.HasPrefix(event.Name, localRoot) {
-        isLocalEvent = true
-        srcProvider, dstProvider = s.localProvider, s.remoteProvider
-        srcMap, dstMap = &s.localMap, &s.remoteMap
-        log.Printf("Matched as local event\n")
-    } else if strings.HasPrefix(event.Name, remoteRoot) {
-        isLocalEvent = false
-        srcProvider, dstProvider = s.remoteProvider, s.localProvider
-        srcMap, dstMap = &s.remoteMap, &s.localMap
-        log.Printf("Matched as remote event\n")
-    } else {
-        log.Printf("Unrecognized event source: %s (doesn't match local or remote path)\n", event.Name)
-        return fmt.Errorf("unrecognized event source: %s", event.Name)
-    }
+	if strings.HasPrefix(event.Name, localRoot) {
+		isLocalEvent = true
+		srcProvider, dstProvider = s.localProvider, s.remoteProvider
+		srcMap, dstMap = &s.localMap, &s.remoteMap
+		log.Printf("Matched as local event\n")
+	} else if strings.HasPrefix(event.Name, remoteRoot) {
+		isLocalEvent = false
+		srcProvider, dstProvider = s.remoteProvider, s.localProvider
+		srcMap, dstMap = &s.remoteMap, &s.localMap
+		log.Printf("Matched as remote event\n")
+	} else {
+		log.Printf("Unrecognized event source: %s (doesn't match local or remote path)\n", event.Name)
+		return fmt.Errorf("unrecognized event source: %s", event.Name)
+	}
 
-    relPath, err := filepath.Rel(srcProvider.GetPath(), event.Name)
-    if err != nil {
-        return fmt.Errorf("error getting relative path for event %s: %w", event.Name, err)
-    }
-    relPath = filepath.ToSlash(relPath)
+	relPath, err := filepath.Rel(srcProvider.GetPath(), event.Name)
+	if err != nil {
+		return fmt.Errorf("error getting relative path for event %s: %w", event.Name, err)
+	}
+	relPath = filepath.ToSlash(relPath)
 
-    if event.Op&fsnotify.Create == fsnotify.Create {
-        info, err := os.Stat(event.Name)
-        if err == nil && info.IsDir() {
-            log.Printf("Directory created: %s\n", event.Name)
-            s.watcher.Add(event.Name)
-            if err := dstProvider.EnsureDir(relPath); err != nil {
-                log.Printf("error replicating directory %s: %v\n", relPath, err)
-            }
-            return nil
-        }
-    }
+	if event.Op&fsnotify.Create == fsnotify.Create {
+		info, err := os.Stat(event.Name)
+		if err == nil && info.IsDir() {
+			log.Printf("Directory created: %s\n", event.Name)
+			s.watcher.Add(event.Name)
+			if err := dstProvider.EnsureDir(relPath); err != nil {
+				log.Printf("error replicating directory %s: %v\n", relPath, err)
+			}
+			return nil
+		}
+	}
 
-    if event.Op&fsnotify.Remove == fsnotify.Remove || event.Op&fsnotify.Rename == fsnotify.Rename {
-        s.mu.Lock()
-        defer s.mu.Unlock()
-        if event.Op&fsnotify.Rename == fsnotify.Rename && event.Op&fsnotify.Remove != fsnotify.Remove {
-            log.Printf("File moved or renamed: %s\n", event.Name)
-        } else {
-            log.Printf("File deleted: %s\n", event.Name)
-        }
-        delete(*srcMap, relPath)
-        delete(*dstMap, relPath)
-        if err := dstProvider.DeleteFile(relPath); err != nil {
-            log.Printf("error deleting file %s: %v\n", relPath, err)
-        }
+	if event.Op&fsnotify.Remove == fsnotify.Remove || event.Op&fsnotify.Rename == fsnotify.Rename {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if event.Op&fsnotify.Rename == fsnotify.Rename && event.Op&fsnotify.Remove != fsnotify.Remove {
+			log.Printf("File moved or renamed: %s\n", event.Name)
+		} else {
+			log.Printf("File deleted: %s\n", event.Name)
+		}
+		delete(*srcMap, relPath)
+		delete(*dstMap, relPath)
+		if err := dstProvider.DeleteFile(relPath); err != nil {
+			log.Printf("error deleting file %s: %v\n", relPath, err)
+		}
 
-        if s.eventCallback != nil {
-            direction := "remote_to_local"
-            if isLocalEvent {
-                direction = "local_to_remote"
-            }
-            eventType := "delete"
-            message := fmt.Sprintf("File deleted: %s", relPath)
-            if event.Op&fsnotify.Rename == fsnotify.Rename && event.Op&fsnotify.Remove != fsnotify.Remove {
-                eventType = "move"
-                message = fmt.Sprintf("File moved or renamed: %s", relPath)
-            }
-            s.eventCallback(eventType, relPath, direction, message)
-        }
-        return nil
-    }
+		if s.eventCallback != nil {
+			direction := "remote_to_local"
+			if isLocalEvent {
+				direction = "local_to_remote"
+			}
+			eventType := "delete"
+			message := fmt.Sprintf("File deleted: %s", relPath)
+			if event.Op&fsnotify.Rename == fsnotify.Rename && event.Op&fsnotify.Remove != fsnotify.Remove {
+				eventType = "move"
+				message = fmt.Sprintf("File moved or renamed: %s", relPath)
+			}
+			s.eventCallback(eventType, relPath, direction, message)
+		}
+		return nil
+	}
 
-    s.mu.Lock()
-    defer s.mu.Unlock()
-    log.Printf("Checking event type: %s | CREATE=%v WRITE=%v CHMOD=%v\n", event.Op,
-        event.Op&fsnotify.Create == fsnotify.Create,
-        event.Op&fsnotify.Write == fsnotify.Write,
-        event.Op&fsnotify.Chmod == fsnotify.Chmod)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log.Printf("Checking event type: %s | CREATE=%v WRITE=%v CHMOD=%v\n", event.Op,
+		event.Op&fsnotify.Create == fsnotify.Create,
+		event.Op&fsnotify.Write == fsnotify.Write,
+		event.Op&fsnotify.Chmod == fsnotify.Chmod)
 
-    if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Chmod == fsnotify.Chmod {
-        srcMeta, err := srcProvider.GetMetadata(relPath)
-        if err != nil {
-            if os.IsNotExist(err) {
-                log.Printf("File %s no longer exists.\n", event.Name)
-                if err := dstProvider.DeleteFile(relPath); err != nil {
-                    log.Printf("error deleting file %s: %v\n", relPath, err)
-                }
-                delete(*srcMap, relPath)
-                delete(*dstMap, relPath)
-            } else {
-                log.Printf("error getting metadata for file %s: %v\n", event.Name, err)
-            }
-            return nil
-        }
-        dstMeta, existsInDst := (*dstMap)[relPath]
-        if existsInDst && srcMeta.Hash == dstMeta.Hash {
-            (*srcMap)[relPath] = srcMeta
-            (*dstMap)[relPath] = dstMeta
-            return nil
-        }
+	if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Chmod == fsnotify.Chmod {
+		srcMeta, err := srcProvider.GetMetadata(relPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("File %s no longer exists.\n", event.Name)
+				if err := dstProvider.DeleteFile(relPath); err != nil {
+					log.Printf("error deleting file %s: %v\n", relPath, err)
+				}
+				delete(*srcMap, relPath)
+				delete(*dstMap, relPath)
+			} else {
+				log.Printf("error getting metadata for file %s: %v\n", event.Name, err)
+			}
+			return nil
+		}
+		dstMeta, existsInDst := (*dstMap)[relPath]
+		if existsInDst && srcMeta.Hash == dstMeta.Hash {
+			(*srcMap)[relPath] = srcMeta
+			(*dstMap)[relPath] = dstMeta
+			return nil
+		}
 
-        if !existsInDst || srcMeta.ModTime.After(dstMeta.ModTime) {
-            direction := "remote_to_local"
-            if isLocalEvent {
-                direction = "local_to_remote"
-            }
-            log.Printf("%s sync for %s\n", direction, relPath)
-            if err := copyFile(srcProvider, dstProvider, relPath, srcMeta.ModTime); err != nil {
-                log.Printf("error syncing file %s: %v\n", relPath, err)
-                return nil
-            }
-            (*srcMap)[relPath] = srcMeta
-            (*dstMap)[relPath] = srcMeta
+		if !existsInDst || srcMeta.ModTime.After(dstMeta.ModTime) {
+			direction := "remote_to_local"
+			if isLocalEvent {
+				direction = "local_to_remote"
+			}
+			log.Printf("%s sync for %s\n", direction, relPath)
+			if err := copyFile(srcProvider, dstProvider, relPath, srcMeta.ModTime); err != nil {
+				log.Printf("error syncing file %s: %v\n", relPath, err)
+				return nil
+			}
+			(*srcMap)[relPath] = srcMeta
+			(*dstMap)[relPath] = srcMeta
 
-            if s.eventCallback != nil {
-                s.eventCallback("sync", relPath, direction, fmt.Sprintf("File synced: %s", relPath))
-            }
-        } else {
-            log.Printf("Stale write detected for file %s; ignoring.\n", relPath)
-            if err := copyFile(dstProvider, srcProvider, relPath, dstMeta.ModTime); err != nil {
-                log.Printf("error reverting stale write for file %s: %v\n", relPath, err)
-                return nil
-            }
-            (*srcMap)[relPath] = dstMeta
-            (*dstMap)[relPath] = dstMeta
-        }
-    }
-    return nil
+			if s.eventCallback != nil {
+				s.eventCallback("sync", relPath, direction, fmt.Sprintf("File synced: %s", relPath))
+			}
+		} else {
+			log.Printf("Stale write detected for file %s; ignoring.\n", relPath)
+			if err := copyFile(dstProvider, srcProvider, relPath, dstMeta.ModTime); err != nil {
+				log.Printf("error reverting stale write for file %s: %v\n", relPath, err)
+				return nil
+			}
+			(*srcMap)[relPath] = dstMeta
+			(*dstMap)[relPath] = dstMeta
+		}
+	}
+	return nil
 }
 
 func (s *SyncEngine) GetLocalFileCount() int {

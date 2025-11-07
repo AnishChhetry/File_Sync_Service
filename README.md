@@ -32,6 +32,7 @@ File Sync Service/
 │   │   ├── engine/         # Sync engine orchestrating reconciliation
 │   │   ├── models/         # Shared Go data structures
 │   │   └── storage/        # Pluggable storage provider implementations
+|   |   └── utils/
 │   ├── local_data/         # Default local watch folder
 │   └── remote_data/        # Default remote folder mirror
 ├── frontend/

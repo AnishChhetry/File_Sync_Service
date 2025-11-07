@@ -129,7 +129,6 @@ func (s *Server) handleWebSocket(c *gin.Context) {
 
 	log.Printf("Client connected via WebSocket. Total clients: %d\n", len(s.clients))
 
-	// Keep connection alive and read messages (ping/pong)
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
