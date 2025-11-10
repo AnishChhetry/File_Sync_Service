@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Defines the interface for storage backends.
 type StorageProvider interface {
 	BuildStateMap() (map[string]models.FileMetadata, error)
 	GetReader(relativePath string) (io.ReadCloser, error)

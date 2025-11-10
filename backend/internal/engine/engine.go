@@ -15,6 +15,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// Handles synchronization between local and remote storage providers.
 type SyncEngine struct {
 	localProvider  storage.StorageProvider
 	remoteProvider storage.StorageProvider
@@ -29,6 +30,15 @@ type SyncEngine struct {
 	eventCallback func(eventType, filePath, direction, message string)
 }
 
+// Represents information about a synchronized file.
+type FileInfo struct {
+	RelativePath string `json:"relativePath"`
+	Hash         string `json:"hash"`
+	ModTime      string `json:"modTime"`
+	Location     string `json:"location"`
+}
+
+// Copies a file from src to dst storage providers.
 func copyFile(src storage.StorageProvider, dst storage.StorageProvider, relativePath string, modTime time.Time) error {
 	reader, err := src.GetReader(relativePath)
 	if err != nil {
@@ -53,14 +63,9 @@ func copyFile(src storage.StorageProvider, dst storage.StorageProvider, relative
 	return nil
 }
 
-type FileInfo struct {
-	RelativePath string `json:"relativePath"`
-	Hash         string `json:"hash"`
-	ModTime      string `json:"modTime"`
-	Location     string `json:"location"`
-}
-
+// Creates a new SyncEngine instance.
 func NewSyncEngine(localProvider storage.StorageProvider, remoteProvider storage.StorageProvider) (*SyncEngine, error) {
+	// Initialize fsnotify watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
@@ -74,10 +79,12 @@ func NewSyncEngine(localProvider storage.StorageProvider, remoteProvider storage
 	}, nil
 }
 
+// Sets a callback function to be called on sync events.
 func (s *SyncEngine) SetEventCallback(callback func(eventType, filePath, direction, message string)) {
 	s.eventCallback = callback
 }
 
+// Starts the synchronization engine.
 func (s *SyncEngine) Run() error {
 	if err := s.ensureFolderExists(); err != nil {
 		return err
@@ -88,6 +95,8 @@ func (s *SyncEngine) Run() error {
 	if err := s.reconcile(); err != nil {
 		return err
 	}
+	// Start the watcher in a separate goroutine
+	// This allows the Run method to return immediately after setup.
 	go func() {
 		if err := s.startWatcher(); err != nil {
 			log.Printf("Watcher error: %v\n", err)
@@ -95,7 +104,10 @@ func (s *SyncEngine) Run() error {
 	}()
 	return nil
 }
+
+// Ensures that the local and remote folders exist.
 func (s *SyncEngine) ensureFolderExists() error {
+	// 0755 is a common permission setting for directories (read/write/execute for owner, read/execute for group and others)
 	if err := os.MkdirAll(s.localProvider.GetPath(), 0755); err != nil {
 		return err
 	}
@@ -104,6 +116,8 @@ func (s *SyncEngine) ensureFolderExists() error {
 	}
 	return nil
 }
+
+// Builds the initial state maps for local and remote storage.
 func (s *SyncEngine) buildInitialState() error {
 	localMap, err := s.localProvider.BuildStateMap()
 	if err != nil {
@@ -123,10 +137,13 @@ func (s *SyncEngine) buildInitialState() error {
 	return nil
 }
 
+// Reconciles differences between local and remote storage.
 func (s *SyncEngine) reconcile() error {
+	// Lock the state maps during reconciliation
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Check for files that exist locally but not remotely
 	for relPath, localMeta := range s.localMap {
 		remoteMeta, existsInRemote := s.remoteMap[relPath]
 
@@ -139,8 +156,9 @@ func (s *SyncEngine) reconcile() error {
 			log.Printf("File %s copied to remote successfully.\n", relPath)
 			continue
 		}
-
+		// If file exists in both, compare hashes
 		if localMeta.Hash != remoteMeta.Hash {
+			// Determine which file is newer based on modification time
 			if localMeta.ModTime.After(remoteMeta.ModTime) {
 				log.Printf("File %s is newer locally. Updating remote file...\n", relPath)
 				if err := copyFile(s.localProvider, s.remoteProvider, relPath, localMeta.ModTime); err != nil {
@@ -159,6 +177,7 @@ func (s *SyncEngine) reconcile() error {
 		}
 	}
 
+	// Check for files that exist remotely but not locally
 	for relPath, remoteMeta := range s.remoteMap {
 		if _, existsInLocal := s.localMap[relPath]; !existsInLocal {
 			log.Printf("File %s exists remotely but not locally. Copying to local...\n", relPath)
@@ -174,24 +193,29 @@ func (s *SyncEngine) reconcile() error {
 	return nil
 }
 
+// Starts the file system watcher to monitor changes.
 func (s *SyncEngine) startWatcher() error {
 	log.Println("Starting file system watcher...")
 	defer s.watcher.Close()
+	// Add local and remote root paths to the watcher
 	if err := s.addWatcherPath(s.localProvider.GetPath()); err != nil {
 		log.Printf("Error adding local path to watcher: %v\n", err)
 	}
 	if err := s.addWatcherPath(s.remoteProvider.GetPath()); err != nil {
 		log.Printf("Error adding remote path to watcher: %v\n", err)
 	}
+	// Listen for events
 	for {
 		select {
 		case event, ok := <-s.watcher.Events:
+			// If the channel is closed, exit the goroutine
 			if !ok {
 				log.Println("Watcher event channel closed.")
 				return nil
 			}
 			s.handleEvent(event)
 		case err, ok := <-s.watcher.Errors:
+			// If the channel is closed, exit the goroutine
 			if !ok {
 				log.Println("Watcher error channel closed.")
 				return nil
@@ -201,11 +225,14 @@ func (s *SyncEngine) startWatcher() error {
 	}
 }
 
+// Adds a path and its subdirectories to the watcher.
 func (s *SyncEngine) addWatcherPath(rootPath string) error {
+	// Walk through the directory tree and add each directory to the watcher
 	return filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		// Add directory to watcher
 		if d.IsDir() {
 			if err := s.watcher.Add(path); err != nil {
 				log.Printf("Error adding path %s to watcher: %v\n", path, err)
@@ -217,6 +244,7 @@ func (s *SyncEngine) addWatcherPath(rootPath string) error {
 	})
 }
 
+// Handles file system events.
 func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 	log.Printf("Event received: %s | Operation: %s\n", event.Name, event.Op)
 
@@ -229,6 +257,7 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		log.Printf("Sync paused, ignoring event for: %s\n", event.Name)
 		return nil
 	}
+	// Determine if the event is from local or remote provider
 	localRoot := s.localProvider.GetPath()
 	remoteRoot := s.remoteProvider.GetPath()
 
@@ -238,6 +267,7 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 
 	log.Printf("Path check - event: '%s' | local root: '%s' | remote root: '%s'\n", event.Name, localRoot, remoteRoot)
 
+	// Determine if the event is from local or remote provider
 	if strings.HasPrefix(event.Name, localRoot) {
 		isLocalEvent = true
 		srcProvider, dstProvider = s.localProvider, s.remoteProvider
@@ -253,13 +283,16 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		return fmt.Errorf("unrecognized event source: %s", event.Name)
 	}
 
+	// Get the relative path of the event with respect to the source provider's root path
 	relPath, err := filepath.Rel(srcProvider.GetPath(), event.Name)
 	if err != nil {
 		return fmt.Errorf("error getting relative path for event %s: %w", event.Name, err)
 	}
 	relPath = filepath.ToSlash(relPath)
 
+	// Handle directory creation events
 	if event.Op&fsnotify.Create == fsnotify.Create {
+		// Check if the created entity is a directory
 		info, err := os.Stat(event.Name)
 		if err == nil && info.IsDir() {
 			log.Printf("Directory created: %s\n", event.Name)
@@ -271,6 +304,7 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		}
 	}
 
+	// Handle file deletion or renaming events
 	if event.Op&fsnotify.Remove == fsnotify.Remove || event.Op&fsnotify.Rename == fsnotify.Rename {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -279,8 +313,10 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		} else {
 			log.Printf("File deleted: %s\n", event.Name)
 		}
+		// Remove from both maps
 		delete(*srcMap, relPath)
 		delete(*dstMap, relPath)
+
 		if err := dstProvider.DeleteFile(relPath); err != nil {
 			log.Printf("error deleting file %s: %v\n", relPath, err)
 		}
@@ -308,14 +344,17 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 		event.Op&fsnotify.Write == fsnotify.Write,
 		event.Op&fsnotify.Chmod == fsnotify.Chmod)
 
+	// Handle file creation or modification events
 	if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Chmod == fsnotify.Chmod {
 		srcMeta, err := srcProvider.GetMetadata(relPath)
+		// If the file no longer exists, it might have been deleted after the event was fired
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("File %s no longer exists.\n", event.Name)
 				if err := dstProvider.DeleteFile(relPath); err != nil {
 					log.Printf("error deleting file %s: %v\n", relPath, err)
 				}
+				// Remove from both maps
 				delete(*srcMap, relPath)
 				delete(*dstMap, relPath)
 			} else {
@@ -323,35 +362,41 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 			}
 			return nil
 		}
+		// Update the source map with the latest metadata
 		dstMeta, existsInDst := (*dstMap)[relPath]
 		if existsInDst && srcMeta.Hash == dstMeta.Hash {
+			// No action needed, files are identical
 			(*srcMap)[relPath] = srcMeta
 			(*dstMap)[relPath] = dstMeta
 			return nil
 		}
-
+		// If the source file is newer, copy it to the destination
 		if !existsInDst || srcMeta.ModTime.After(dstMeta.ModTime) {
 			direction := "remote_to_local"
 			if isLocalEvent {
 				direction = "local_to_remote"
 			}
 			log.Printf("%s sync for %s\n", direction, relPath)
+			// Copy the source file to the destination
 			if err := copyFile(srcProvider, dstProvider, relPath, srcMeta.ModTime); err != nil {
 				log.Printf("error syncing file %s: %v\n", relPath, err)
 				return nil
 			}
+			// Update the destination map with the latest metadata
 			(*srcMap)[relPath] = srcMeta
 			(*dstMap)[relPath] = srcMeta
 
 			if s.eventCallback != nil {
 				s.eventCallback("sync", relPath, direction, fmt.Sprintf("File synced: %s", relPath))
 			}
-		} else {
+		} else { // Source file is older than destination
 			log.Printf("Stale write detected for file %s; ignoring.\n", relPath)
+			// Revert the change by copying the destination file back to the source
 			if err := copyFile(dstProvider, srcProvider, relPath, dstMeta.ModTime); err != nil {
 				log.Printf("error reverting stale write for file %s: %v\n", relPath, err)
 				return nil
 			}
+			// Update the destination map with the latest metadata
 			(*srcMap)[relPath] = dstMeta
 			(*dstMap)[relPath] = dstMeta
 		}
@@ -359,18 +404,21 @@ func (s *SyncEngine) handleEvent(event fsnotify.Event) error {
 	return nil
 }
 
+// Returns the count of files in the local storage.
 func (s *SyncEngine) GetLocalFileCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.localMap)
 }
 
+// Returns the count of files in the remote storage.
 func (s *SyncEngine) GetRemoteFileCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.remoteMap)
 }
 
+// Returns a list of all synchronized files with their details.
 func (s *SyncEngine) GetFileList() []FileInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -402,6 +450,8 @@ func (s *SyncEngine) GetFileList() []FileInfo {
 		}
 	}
 
+	// Convert the map to a slice because maps do not guarantee order
+	// order is important for consistent API responses
 	files := make([]FileInfo, 0, len(fileSet))
 	for _, info := range fileSet {
 		files = append(files, info)
@@ -410,6 +460,7 @@ func (s *SyncEngine) GetFileList() []FileInfo {
 	return files
 }
 
+// Pauses the synchronization engine.
 func (s *SyncEngine) Pause() {
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
@@ -417,6 +468,7 @@ func (s *SyncEngine) Pause() {
 	log.Println("Sync engine paused")
 }
 
+// Resumes the synchronization engine.
 func (s *SyncEngine) Resume() {
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
@@ -424,21 +476,23 @@ func (s *SyncEngine) Resume() {
 	log.Println("Sync engine resumed")
 }
 
+// Checks if the synchronization engine is paused.
 func (s *SyncEngine) IsPaused() bool {
 	s.pauseMu.RLock()
 	defer s.pauseMu.RUnlock()
 	return s.isPaused
 }
 
+// Manually triggers a synchronization process.
 func (s *SyncEngine) ManualSync() error {
-	s.pauseMu.RLock()
-	paused := s.isPaused
-	s.pauseMu.RUnlock()
+	// s.pauseMu.RLock()
+	// paused := s.isPaused
+	// s.pauseMu.RUnlock()
 
-	if paused {
-		log.Println("Cannot perform manual sync while paused")
-		return fmt.Errorf("sync engine is paused")
-	}
+	// if paused {
+	// 	log.Println("Cannot perform manual sync while paused")
+	// 	return fmt.Errorf("sync engine is paused")
+	// }
 
 	log.Println("Starting manual sync...")
 

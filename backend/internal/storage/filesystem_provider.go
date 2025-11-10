@@ -11,10 +11,12 @@ import (
 	"time"
 )
 
+// Implements StorageProvider for local filesystem storage.
 type FileSystemProvider struct {
 	rootPath string
 }
 
+// Creates a new FileSystemProvider rooted at the given path.
 func NewFileSystemProvider(rootPath string) (*FileSystemProvider, error) {
 	absPath, err := filepath.Abs(rootPath)
 	if err != nil {
@@ -23,6 +25,7 @@ func NewFileSystemProvider(rootPath string) (*FileSystemProvider, error) {
 	return &FileSystemProvider{rootPath: absPath}, nil
 }
 
+// Builds a map of the current state of the filesystem.
 func (p *FileSystemProvider) BuildStateMap() (map[string]models.FileMetadata, error) {
 	stateMap := make(map[string]models.FileMetadata)
 	err := filepath.WalkDir(p.rootPath, func(path string, d os.DirEntry, err error) error {
@@ -49,6 +52,7 @@ func (p *FileSystemProvider) BuildStateMap() (map[string]models.FileMetadata, er
 	return stateMap, nil
 }
 
+// Returns a reader for the specified file.
 func (p *FileSystemProvider) GetReader(relativePath string) (io.ReadCloser, error) {
 	fullPath := filepath.Join(p.rootPath, relativePath)
 	file, err := os.Open(fullPath)
@@ -58,34 +62,13 @@ func (p *FileSystemProvider) GetReader(relativePath string) (io.ReadCloser, erro
 	return file, nil
 }
 
+// Returns metadata for the specified file.
 func (p *FileSystemProvider) GetMetadata(relativePath string) (models.FileMetadata, error) {
 	fullPath := filepath.Join(p.rootPath, relativePath)
 	return p.metadataForAbsolute(fullPath)
 }
 
-type writerWithModTime struct {
-	filePath string
-	file     *os.File
-	modTime  time.Time
-}
-
-func (w *writerWithModTime) Write(p []byte) (int, error) {
-	return w.file.Write(p)
-}
-
-func (w *writerWithModTime) Close() error {
-	if err := w.file.Close(); err != nil {
-		return err
-	}
-	if w.modTime.IsZero() {
-		return nil
-	}
-	if err := os.Chtimes(w.filePath, w.modTime, w.modTime); err != nil {
-		return fmt.Errorf("failed to preserve mod time for %s: %w", w.filePath, err)
-	}
-	return nil
-}
-
+// Returns a writer for the specified file.
 func (p *FileSystemProvider) GetWriter(relativePath string, modTime time.Time) (io.WriteCloser, error) {
 	fullPath := filepath.Join(p.rootPath, relativePath)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
@@ -102,6 +85,7 @@ func (p *FileSystemProvider) GetWriter(relativePath string, modTime time.Time) (
 	}, nil
 }
 
+// Deletes the specified file.
 func (p *FileSystemProvider) DeleteFile(relativePath string) error {
 	fullPath := filepath.Join(p.rootPath, relativePath)
 	if err := os.RemoveAll(fullPath); err != nil && !os.IsNotExist(err) {
@@ -110,18 +94,21 @@ func (p *FileSystemProvider) DeleteFile(relativePath string) error {
 	return nil
 }
 
+// Ensures that the specified directory exists.
 func (p *FileSystemProvider) EnsureDir(relativePath string) error {
 	fullPath := filepath.Join(p.rootPath, relativePath)
-	if err := os.MkdirAll(fullPath, 0o755); err != nil {
+	if err := os.MkdirAll(fullPath, 0755); err != nil {
 		return fmt.Errorf("failed to ensure directory %s: %w", fullPath, err)
 	}
 	return nil
 }
 
+// Returns the root path of the filesystem provider.
 func (p *FileSystemProvider) GetPath() string {
 	return p.rootPath
 }
 
+// Retrieves metadata for a file given its absolute path.
 func (p *FileSystemProvider) metadataForAbsolute(fullPath string) (models.FileMetadata, error) {
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -143,6 +130,7 @@ func (p *FileSystemProvider) metadataForAbsolute(fullPath string) (models.FileMe
 	}, nil
 }
 
+// Computes the SHA256 hash of a file at the given path.
 func hashFile(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -156,4 +144,30 @@ func hashFile(path string) (string, error) {
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// Wraps an os.File to set modification time on Close.
+type writerWithModTime struct {
+	filePath string
+	file     *os.File
+	modTime  time.Time
+}
+
+// Writes data to the underlying file.
+func (w *writerWithModTime) Write(p []byte) (int, error) {
+	return w.file.Write(p)
+}
+
+// Closes the underlying file and sets the modification time.
+func (w *writerWithModTime) Close() error {
+	if err := w.file.Close(); err != nil {
+		return err
+	}
+	if w.modTime.IsZero() {
+		return nil
+	}
+	if err := os.Chtimes(w.filePath, w.modTime, w.modTime); err != nil {
+		return fmt.Errorf("failed to preserve mod time for %s: %w", w.filePath, err)
+	}
+	return nil
 }

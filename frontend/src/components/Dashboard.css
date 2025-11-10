@@ -114,11 +114,11 @@
   box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
 }
 
-.sync-btn:disabled {
+/* .sync-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
-}
+} */
 
 .control-btn:active:not(:disabled) {
   transform: translateY(0);
