@@ -4,8 +4,8 @@ import Dashboard from './components/Dashboard';
 import FileList from './components/FileList';
 import ActivityLog from './components/ActivityLog';
 
-const API_URL = 'http://localhost:8080';
-const WS_URL = 'ws://localhost:8080/ws';
+const API_URL = (process.env.REACT_APP_API_URL || 'http://localhost:8080').replace(/\/$/, '');
+const WS_URL = (process.env.REACT_APP_WS_URL || '').replace(/\/$/, '') || `${API_URL.replace(/^http/, 'ws')}/ws`;
 
 const normalizeActivity = (activity) => {
   const eventTime = activity?.timestamp ? new Date(activity.timestamp) : new Date();
@@ -34,8 +34,12 @@ function App() {
   const [activities, setActivities] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [statusError, setStatusError] = useState('');
+  const [filesError, setFilesError] = useState('');
+  const [connectionNotice, setConnectionNotice] = useState('');
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const shouldReconnectRef = useRef(true);
 
   const pushActivity = useCallback((activity) => {
     setActivities((prev) => {
@@ -60,42 +64,48 @@ function App() {
 
   const fetchStatus = useCallback(async () => {
     try {
+      setStatusError('');
       const response = await fetch(`${API_URL}/api/status`);
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
       const data = await response.json();
       setStatus(data);
     } catch (error) {
       console.error('Error fetching status:', error);
       setStatus(prev => ({ ...prev, status: 'error' }));
+      setStatusError('Unable to fetch sync status. Displaying last known information.');
     }
   }, []);
 
   const fetchFiles = useCallback(async () => {
     try {
+      setFilesError('');
       const response = await fetch(`${API_URL}/api/files`);
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
       const data = await response.json();
       setFiles(data || []);
     } catch (error) {
       console.error('Error fetching files:', error);
+      setFilesError('Unable to fetch file list. Displaying last known results.');
     }
   }, []);
 
-  useEffect(() => {
-    // Fetch initial status
-    fetchStatus();
-    fetchFiles();
+  const connectWebSocket = useCallback(() => {
+    if (!WS_URL) {
+      return;
+    }
 
-    // Set up polling for status
-    const statusInterval = setInterval(fetchStatus, 5000);
-
-    let shouldReconnect = true;
-
-    const connectWebSocket = () => {
+    try {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
         console.log('WebSocket connected');
         setWsConnected(true);
+        setConnectionNotice('');
         if (reconnectTimeoutRef.current) {
           clearTimeout(reconnectTimeoutRef.current);
           reconnectTimeoutRef.current = null;
@@ -106,47 +116,109 @@ function App() {
         const syncEvent = JSON.parse(event.data);
         console.log('Received sync event:', syncEvent);
 
-        // Add to activity log
         pushActivity(syncEvent);
-
-        // Refresh file list
         fetchFiles();
         fetchStatus();
       };
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
+        setConnectionNotice('Real-time connection error. Attempting to reconnect...');
         ws.close();
       };
 
       ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setWsConnected(false);
-        wsRef.current = null;
-        if (shouldReconnect) {
-          if (reconnectTimeoutRef.current) {
-            clearTimeout(reconnectTimeoutRef.current);
-          }
-          reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
+        const isLatestSocket = wsRef.current === ws;
+        if (isLatestSocket) {
+          setWsConnected(false);
+          wsRef.current = null;
         }
-      };
-    };
 
-    connectWebSocket();
+        if (!shouldReconnectRef.current || !isLatestSocket) {
+          return;
+        }
+
+        setConnectionNotice('Real-time updates unavailable. Attempting to reconnect...');
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
+      };
+    } catch (error) {
+      console.error('Unable to establish WebSocket connection:', error);
+      setConnectionNotice('Unable to establish real-time connection.');
+    }
+  }, [fetchFiles, fetchStatus, pushActivity]);
+
+  useEffect(() => {
+    // Fetch initial status
+    fetchStatus();
+    fetchFiles();
+
+    // Set up polling for status
+    const statusInterval = setInterval(fetchStatus, 5000);
+
+    shouldReconnectRef.current = true;
+
+    if (WS_URL) {
+      connectWebSocket();
+    } else {
+      setConnectionNotice('Real-time updates unavailable: WebSocket URL not configured.');
+    }
 
     return () => {
-      shouldReconnect = false;
+      shouldReconnectRef.current = false;
       clearInterval(statusInterval);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
       if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
+        try {
+          wsRef.current.close();
+        } catch (error) {
+          console.error('Error closing WebSocket:', error);
+        } finally {
+          wsRef.current = null;
+        }
       }
     };
-  }, [fetchStatus, fetchFiles, pushActivity]);
+  }, [fetchStatus, fetchFiles, connectWebSocket]);
+
+  const handleRetryStatus = useCallback(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const handleRetryFiles = useCallback(() => {
+    fetchFiles();
+  }, [fetchFiles]);
+
+  const handleRetryConnection = useCallback(() => {
+    if (!WS_URL) {
+      setConnectionNotice('Real-time updates unavailable: WebSocket URL not configured.');
+      return;
+    }
+
+    setConnectionNotice('Attempting to reconnect...');
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    if (wsRef.current) {
+      try {
+        const existing = wsRef.current;
+        wsRef.current = null;
+        existing.close();
+      } catch (error) {
+        console.error('Error closing existing WebSocket:', error);
+      }
+    }
+
+    shouldReconnectRef.current = true;
+    connectWebSocket();
+  }, [connectWebSocket]);
 
   const handlePause = async () => {
     try {
@@ -229,6 +301,30 @@ function App() {
       </header>
       
       <main className="app-main">
+        {connectionNotice && (
+          <div className="alert alert-warning" role="status">
+            <span aria-hidden="true">🔌</span>
+            <span className="alert-message">{connectionNotice}</span>
+            {WS_URL && (
+              <div className="alert-actions">
+                <button type="button" className="alert-action" onClick={handleRetryConnection}>
+                  Retry
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {statusError && (
+          <div className="alert alert-error" role="alert">
+            <span aria-hidden="true">⚠️</span>
+            <span className="alert-message">{statusError}</span>
+            <div className="alert-actions">
+              <button type="button" className="alert-action" onClick={handleRetryStatus}>
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
         <Dashboard 
           status={status} 
           onPause={handlePause}
@@ -240,6 +336,17 @@ function App() {
         <div className="content-grid">
           <div className="panel">
             <h2>📂 Synced Files</h2>
+            {filesError && (
+              <div className="alert alert-error panel-alert" role="alert">
+                <span aria-hidden="true">⚠️</span>
+                <span className="alert-message">{filesError}</span>
+                <div className="alert-actions">
+                  <button type="button" className="alert-action" onClick={handleRetryFiles}>
+                    Retry
+                  </button>
+                </div>
+              </div>
+            )}
             <FileList files={files} />
           </div>
           

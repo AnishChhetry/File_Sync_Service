@@ -84,6 +84,40 @@
   color: #9ca3af;
 }
 
+.activity-pagination {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.activity-page-btn {
+  background: #eef2ff;
+  color: #4c1d95;
+  border: 1px solid #c4b5fd;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.activity-page-btn:hover:enabled {
+  background: #c7d2fe;
+}
+
+.activity-page-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.activity-page-info {
+  font-weight: 500;
+}
+
 /* Scrollbar styling */
 .activity-log::-webkit-scrollbar {
   width: 8px;

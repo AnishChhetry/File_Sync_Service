@@ -36,8 +36,10 @@ function FileList({ files }) {
         <div className="file-col-modified">Last Modified</div>
       </div>
       <div className="file-list-body">
-        {files.map((file, index) => (
-          <div key={index} className="file-item">
+        {files.map((file) => {
+          const key = file?.relativePath || `${file?.location || 'file'}-${file?.modTime || ''}`;
+          return (
+          <div key={key} className="file-item">
             <div className="file-col-name">
               <span className="file-icon">📄</span>
               <span className="file-path" title={file.relativePath}>
@@ -51,7 +53,7 @@ function FileList({ files }) {
               {file.modTime}
             </div>
           </div>
-        ))}
+        )})}
       </div>
     </div>
   );

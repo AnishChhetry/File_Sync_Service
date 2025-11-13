@@ -60,7 +60,7 @@ function Dashboard({ status, onPause, onResume, onManualSync, syncing }) {
           <button 
             className="control-btn sync-btn"
             onClick={onManualSync}
-            // disabled={syncing || status.isPaused}
+            disabled={syncing}
           >
             {syncing ? '🔄 Syncing...' : '🔄 Sync Now'}
           </button>
