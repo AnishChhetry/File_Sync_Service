@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"backend/internal/config"
 	"backend/internal/models"
 	"backend/internal/storage"
 	"fmt"
@@ -12,11 +13,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-)
-
-const (
-	defaultJobBufferSize    = 2048
-	defaultDebounceInterval = 500 * time.Millisecond
 )
 
 // Handles synchronization between local and remote storage providers.
@@ -76,42 +72,21 @@ func NewSyncEngine(localProvider storage.StorageProvider, remoteProvider storage
 	}
 
 	return &SyncEngine{
-		localProvider:    localProvider,
-		remoteProvider:   remoteProvider,
-		watcher:          watcher,
-		localMap:         make(map[string]models.FileMetadata),
-		remoteMap:        make(map[string]models.FileMetadata),
-		jobs:             make(chan queuedEvent, defaultJobBufferSize),
-		workerCount:      wc,
-		pendingEvents:    make(map[string]time.Time),
-		debounceInterval: defaultDebounceInterval,
-		stopCh:           make(chan struct{}),
+		localProvider:  localProvider,
+		remoteProvider: remoteProvider,
+		watcher:        watcher,
+		localMap:       make(map[string]models.FileMetadata),
+		remoteMap:      make(map[string]models.FileMetadata),
+		jobs:           make(chan queuedEvent, config.DefaultJobBufferSize),
+		workerCount:    wc,
+		pendingEvents:  make(map[string]time.Time),
+		stopCh:         make(chan struct{}),
 	}, nil
 }
 
 // Sets a callback function to be called on sync events.
 func (s *SyncEngine) SetEventCallback(callback func(eventType, filePath, direction, message string)) {
 	s.eventCallback = callback
-}
-
-// Overrides the number of worker goroutines used for processing events.
-func (s *SyncEngine) SetWorkerCount(n int) {
-	if n < 1 {
-		n = 1
-	}
-	s.mu.Lock()
-	s.workerCount = n
-	s.mu.Unlock()
-}
-
-// Sets the debounce window applied when filtering duplicate events.
-func (s *SyncEngine) SetDebounceInterval(d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	s.debounceMu.Lock()
-	s.debounceInterval = d
-	s.debounceMu.Unlock()
 }
 
 // Starts the synchronization engine.
@@ -128,7 +103,7 @@ func (s *SyncEngine) Run() error {
 
 	for i := 0; i < s.workerCount; i++ {
 		s.workerWG.Add(1)
-		go s.worker(i)
+		go s.worker()
 	}
 
 	if err := s.startWatcher(); err != nil {
@@ -151,12 +126,6 @@ func (s *SyncEngine) Stop() {
 		close(s.jobs)
 		s.workerWG.Wait()
 	})
-}
-
-// Blocks until all engine background goroutines have exited.
-func (s *SyncEngine) Wait() {
-	s.watcherWG.Wait()
-	s.workerWG.Wait()
 }
 
 // Starts the file system watcher to monitor changes.
@@ -267,7 +236,7 @@ func (s *SyncEngine) GetFileList() []FileInfo {
 		fileSet[relPath] = FileInfo{
 			RelativePath: relPath,
 			Hash:         meta.Hash,
-			ModTime:      meta.ModTime.Format("2006-01-02 15:04:05"),
+			ModTime:      meta.ModTime.Format("YYYY/MM/DD HH:MM:SS"),
 			Location:     "local",
 		}
 	}
@@ -282,7 +251,7 @@ func (s *SyncEngine) GetFileList() []FileInfo {
 			fileSet[relPath] = FileInfo{
 				RelativePath: relPath,
 				Hash:         meta.Hash,
-				ModTime:      meta.ModTime.Format("2006-01-02 15:04:05"),
+				ModTime:      meta.ModTime.Format("YYYY/MM/DD HH:MM:SS"),
 				Location:     "remote",
 			}
 		}
@@ -321,14 +290,6 @@ func (s *SyncEngine) IsPaused() bool {
 
 // Manually triggers a synchronization process.
 func (s *SyncEngine) ManualSync() error {
-	s.pauseMu.RLock()
-	paused := s.isPaused
-	s.pauseMu.RUnlock()
-
-	if paused {
-		log.Println("Cannot perform manual sync while paused")
-		return fmt.Errorf("sync engine is paused")
-	}
 
 	log.Println("Starting manual sync...")
 
@@ -412,5 +373,5 @@ func (s *SyncEngine) syncFile(event fsnotify.Event, isLocal bool, relPath string
 		return s.syncFileToDestination(srcProvider, dstProvider, srcMap, dstMap, relPath, srcMeta, isLocal)
 	}
 
-	return s.handleFileConflict(relPath, srcMeta, dstMeta, isLocal)
+	return s.handleFileConflict(relPath, isLocal)
 }

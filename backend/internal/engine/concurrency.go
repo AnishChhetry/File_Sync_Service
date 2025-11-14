@@ -7,7 +7,7 @@ import (
 )
 
 // Runs a worker goroutine to process events.
-func (s *SyncEngine) worker(id int) {
+func (s *SyncEngine) worker() {
 	defer s.workerWG.Done()
 	for {
 		select {

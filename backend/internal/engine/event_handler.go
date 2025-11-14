@@ -120,7 +120,7 @@ func (s *SyncEngine) handleWriteOrChmodEvent(event fsnotify.Event, isLocal bool,
 	}
 
 	// Handle conflict
-	return s.handleFileConflict(relPath, srcMeta, dstMeta, isLocal)
+	return s.handleFileConflict(relPath, isLocal)
 }
 
 // Copies file from source to destination provider.
@@ -145,7 +145,7 @@ func (s *SyncEngine) syncFileToDestination(src, dst storage.StorageProvider, src
 }
 
 // Logs and reports file conflicts.
-func (s *SyncEngine) handleFileConflict(relPath string, srcMeta, dstMeta models.FileMetadata, isLocal bool) error {
+func (s *SyncEngine) handleFileConflict(relPath string, isLocal bool) error {
 	log.Printf("Conflict detected for file %s; destination file is newer\n", relPath)
 
 	if s.eventCallback != nil {

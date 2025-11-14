@@ -2,21 +2,21 @@ package main
 
 import (
 	"backend/internal/api"
+	"backend/internal/config"
 	"backend/internal/engine"
 	"backend/internal/storage"
-	"backend/internal/config"
 	"log"
 )
 
 func main() {
 	// Create a local storage provider
-	localProvider, err := storage.NewFileSystemProvider(utils.LOCAL_PATH)
+	localProvider, err := storage.NewFileSystemProvider(config.LOCAL_PATH)
 	if err != nil {
 		log.Fatalf("Failed to initialize local provider: %v", err)
 	}
 
 	// Create a remote storage provider
-	remoteProvider, err := storage.NewFileSystemProvider(utils.REMOTE_PATH)
+	remoteProvider, err := storage.NewFileSystemProvider(config.REMOTE_PATH)
 	if err != nil {
 		log.Fatalf("Failed to initialize remote provider: %v", err)
 	}
@@ -36,7 +36,7 @@ func main() {
 
 	// Start API server
 	apiServer := api.NewServer(syncEngine)
-	if err := apiServer.Start(utils.API_PORT); err != nil {
+	if err := apiServer.Start(config.API_PORT); err != nil {
 		log.Fatalf("Failed to start API server: %v", err)
 	}
 }
